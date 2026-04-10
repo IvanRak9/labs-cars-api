@@ -1,68 +1,43 @@
-import { CarEntity, CreateCarInput, UpdateCarInput } from '../schemas/car.schema';
-import crypto from 'crypto';
+import { CarModel, ICar } from '../models/car.model';
+import { CreateCarInput, UpdateCarInput } from '../schemas/car.schema';
 
-export interface CarFilter {
-    minYear?: number;
-    transmission?: 'manual' | 'automatic' | 'robotic';
-}
+export class CarStorage {
+    async getAll(filter: any, page: number = 1, limit: number = 10) {
+        const skip = (page - 1) * limit;
 
-class CarStorage {
-    private cars: Map<string, CarEntity> = new Map();
+        const [data, total] = await Promise.all([
+            CarModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+            CarModel.countDocuments(filter)
+        ]);
 
-    getAll(filter?: CarFilter): CarEntity[] {
-        let result = Array.from(this.cars.values());
-
-        if (filter) {
-            if (filter.minYear) {
-                result = result.filter(car => car.year >= filter.minYear!);
+        return {
+            data,
+            pagination: {
+                total,
+                page,
+                limit,
+                pages: Math.ceil(total / limit)
             }
-            if (filter.transmission) {
-                result = result.filter(car => car.transmission === filter.transmission);
-            }
-        }
-        return result;
-    }
-
-    getById(id: string): CarEntity | undefined {
-        return this.cars.get(id);
-    }
-
-    create(data: CreateCarInput): CarEntity {
-        const id = crypto.randomUUID();
-        const now = new Date();
-
-        const newCar: CarEntity = {
-            ...data,
-            id,
-            createdAt: now,
-            updatedAt: now,
-            isAvailable: data.isAvailable
         };
-
-        this.cars.set(id, newCar);
-        return newCar;
     }
 
-    update(id: string, data: UpdateCarInput): CarEntity | null {
-        const existingCar = this.cars.get(id);
-        if (!existingCar) return null;
-
-        const updatedCar: CarEntity = {
-            ...existingCar,
-            ...data,
-            updatedAt: new Date()
-        };
-
-        this.cars.set(id, updatedCar);
-        return updatedCar;
+    async getById(id: string) {
+        return await CarModel.findById(id);
     }
 
-    delete(id: string): boolean {
-        return this.cars.delete(id);
+    async create(data: CreateCarInput) {
+        return await CarModel.create(data);
     }
 
-    reset(): void {
-        this.cars.clear();
+    async update(id: string, data: UpdateCarInput) {
+        return await CarModel.findByIdAndUpdate(id, data, {
+            returnDocument: 'after',
+            runValidators: true
+        });
+    }
+
+    async delete(id: string) {
+        return await CarModel.findByIdAndDelete(id);
     }
 }
 

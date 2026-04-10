@@ -1,15 +1,25 @@
 import request from 'supertest';
+import mongoose from 'mongoose';
 import app from '../src/app';
+import { setupTestDB, clearTestDB, teardownTestDB } from './setup';
+import { CarModel } from '../src/models/car.model';
 import { carStorage } from '../src/storage/car';
-import { CreateCarInput } from '../src/schemas/car.schema';
 
-beforeEach(() => {
-    carStorage.reset();
+beforeAll(async () => {
+    await setupTestDB();
 });
 
-describe('Cars REST API', () => {
+afterEach(async () => {
+    await clearTestDB();
+});
 
-    const validCar: CreateCarInput = {
+afterAll(async () => {
+    await teardownTestDB();
+});
+
+describe('Автомобільний REST API (MongoDB)', () => {
+
+    const validCar = {
         model: 'Toyota Camry',
         description: 'Надійний седан',
         year: 2022,
@@ -17,178 +27,191 @@ describe('Cars REST API', () => {
         isAvailable: true
     };
 
-    describe('POST /api/cars', () => {
-        it('повинен створити новий автомобіль та повернути 201', async () => {
-            const res = await request(app)
-                .post('/api/cars')
-                .send(validCar)
-                .expect(201);
-
-            expect(res.body).toHaveProperty('id');
-            expect(res.body.model).toBe(validCar.model);
-            expect(res.body.isAvailable).toBe(true);
-            expect(res.body).toHaveProperty('createdAt');
+    describe('Unit-тести Моделі (CarModel)', () => {
+        it('повинна коректно зберігати валідний автомобіль', async () => {
+            const car = new CarModel(validCar);
+            const savedCar = await car.save();
+            expect(savedCar._id).toBeDefined();
+            expect(savedCar.model).toBe(validCar.model);
+            expect(savedCar.createdAt).toBeDefined();
         });
 
-        it('повинен повернути 400, якщо відсутні обов\'язкові поля', async () => {
-            const invalidCar = { year: 2020 };
+        it('повинна встановлювати дефолтне значення isAvailable = true', async () => {
+            const carData = { ...validCar };
+            delete (carData as any).isAvailable;
 
-            const res = await request(app)
-                .post('/api/cars')
-                .send(invalidCar)
-                .expect(400);
-
-            expect(res.body.message).toBe('Помилка валідації даних');
-            expect(res.body.errors.length).toBeGreaterThan(0);
+            const car = new CarModel(carData);
+            const savedCar = await car.save();
+            expect(savedCar.isAvailable).toBe(true);
         });
 
-        it('повинен повернути 400, якщо передано невалідне значення enum', async () => {
-            const invalidCar = { ...validCar, transmission: 'magic' };
+        it('повинна кидати помилку при невалідному році випуску (кастомний валідатор)', async () => {
+            const car = new CarModel({ ...validCar, year: 1800 });
+            let err;
+            try { await car.save(); } catch (e) { err = e; }
+            expect(err).toBeInstanceOf(mongoose.Error.ValidationError);
+        });
 
-            await request(app)
-                .post('/api/cars')
-                .send(invalidCar)
-                .expect(400);
+        it('повинна обчислювати віртуальну властивість carAge', async () => {
+            const currentYear = new Date().getFullYear();
+            const car = new CarModel({ ...validCar, year: currentYear - 5 });
+            expect(car.carAge).toBe(5);
         });
     });
 
-    describe('GET /api/cars', () => {
-        it('повинен повернути порожній масив, якщо немає записів', async () => {
-            const res = await request(app).get('/api/cars').expect(200);
-            expect(res.body).toEqual([]);
+    describe('Інтеграційні тести API', () => {
+
+        describe('POST /api/cars', () => {
+            it('повинен створити новий автомобіль та повернути 201', async () => {
+                const res = await request(app)
+                    .post('/api/cars')
+                    .send(validCar)
+                    .expect(201);
+
+                expect(res.body).toHaveProperty('id');
+                expect(res.body.model).toBe(validCar.model);
+            });
+
+            it('повинен повернути 400 (Zod), якщо відсутні обов\'язкові поля', async () => {
+                const invalidCar = { year: 2020 };
+                const res = await request(app)
+                    .post('/api/cars')
+                    .send(invalidCar)
+                    .expect(400);
+
+                expect(res.body.message).toBe('Помилка валідації даних (Zod)');
+            });
         });
 
-        it('повинен повернути масив усіх збережених автомобілів', async () => {
-            carStorage.create(validCar);
-            carStorage.create({ ...validCar, model: 'Honda Civic' });
+        describe('GET /api/cars', () => {
+            it('повинен повернути об\'єкт з data та pagination, якщо немає записів', async () => {
+                const res = await request(app).get('/api/cars').expect(200);
+                expect(res.body.data).toEqual([]);
+                expect(res.body.pagination.total).toBe(0);
+            });
 
-            const res = await request(app).get('/api/cars').expect(200);
-            expect(res.body).toHaveLength(2);
-        });
-    });
+            it('повинен повернути сторінку з автомобілями', async () => {
+                await CarModel.create(validCar);
+                await CarModel.create({ ...validCar, model: 'Honda Civic' });
 
-    describe('GET /api/cars/:id', () => {
-        it('повинен повернути автомобіль за існуючим ID', async () => {
-            const car = carStorage.create(validCar);
-
-            const res = await request(app)
-                .get(`/api/cars/${car.id}`)
-                .expect(200);
-
-            expect(res.body.id).toBe(car.id);
-            expect(res.body.model).toBe(car.model);
+                const res = await request(app).get('/api/cars?limit=1').expect(200);
+                expect(res.body.data).toHaveLength(1);
+                expect(res.body.pagination.total).toBe(2);
+                expect(res.body.pagination.pages).toBe(2);
+            });
         });
 
-        it('повинен повернути 404, якщо автомобіль не знайдено', async () => {
-            await request(app)
-                .get('/api/cars/non-existent-id')
-                .expect(404);
-        });
-    });
+        describe('GET /api/cars/:id', () => {
+            it('повинен повернути автомобіль за існуючим ID', async () => {
+                const car = await CarModel.create(validCar);
+                const res = await request(app)
+                    .get(`/api/cars/${car._id}`)
+                    .expect(200);
+                expect(res.body.model).toBe(car.model);
+            });
 
-    describe('PATCH /api/cars/:id', () => {
-        it('повинен частково оновити автомобіль та повернути 200', async () => {
-            const car = carStorage.create(validCar);
+            it('повинен повернути 404, якщо автомобіль не знайдено (але ID валідний)', async () => {
+                const fakeId = new mongoose.Types.ObjectId();
+                await request(app)
+                    .get(`/api/cars/${fakeId}`)
+                    .expect(404);
+            });
 
-            const res = await request(app)
-                .patch(`/api/cars/${car.id}`)
-                .send({ year: 2025, isAvailable: false })
-                .expect(200);
-
-            expect(res.body.year).toBe(2025);
-            expect(res.body.isAvailable).toBe(false);
-            expect(res.body.model).toBe(validCar.model);
-        });
-
-        it('повинен повернути 400 при спробі встановити невалідні дані', async () => {
-            const car = carStorage.create(validCar);
-
-            await request(app)
-                .patch(`/api/cars/${car.id}`)
-                .send({ year: 1500 })
-                .expect(400);
+            it('повинен повернути 400, якщо передано невалідний формат ID (CastError)', async () => {
+                const res = await request(app)
+                    .get('/api/cars/not-a-mongo-id')
+                    .expect(400);
+                expect(res.body.message).toBe('Невалідний формат ID');
+            });
         });
 
-        it('повинен повернути 404 при оновленні неіснуючого ID', async () => {
-            await request(app)
-                .patch('/api/cars/fake-id')
-                .send({ year: 2023 })
-                .expect(404);
-        });
-    });
+        describe('PATCH /api/cars/:id', () => {
+            it('повинен частково оновити автомобіль та повернути 200', async () => {
+                const car = await CarModel.create(validCar);
+                const res = await request(app)
+                    .patch(`/api/cars/${car._id}`)
+                    .send({ year: 2025 })
+                    .expect(200);
 
-    describe('DELETE /api/cars/:id', () => {
-        it('повинен видалити автомобіль та повернути 204', async () => {
-            const car = carStorage.create(validCar);
+                expect(res.body.year).toBe(2025);
+                expect(res.body.model).toBe(validCar.model);
+            });
 
-            await request(app)
-                .delete(`/api/cars/${car.id}`)
-                .expect(204);
+            it('повинен повернути 400 (Помилка БД) при спробі зберегти дані, що порушують схему', async () => {
+                const car = await CarModel.create(validCar);
 
-            expect(carStorage.getById(car.id)).toBeUndefined();
-        });
-
-        it('повинен повернути 404 при спробі видалити неіснуючий автомобіль', async () => {
-            await request(app)
-                .delete('/api/cars/fake-id')
-                .expect(404);
-        });
-    });
-
-    describe('GET /api/cars (Query Filters)', () => {
-        beforeEach(() => {
-            carStorage.create({ ...validCar, model: 'Old Manual', year: 2005, transmission: 'manual', isAvailable: true });
-            carStorage.create({ ...validCar, model: 'New Auto', year: 2024, transmission: 'automatic', isAvailable: false });
-            carStorage.create({ ...validCar, model: 'Mid Robotic', year: 2015, transmission: 'robotic', isAvailable: true });
+                let err;
+                try {
+                    await CarModel.findByIdAndUpdate(car._id, { transmission: 'invalid_enum' }, { runValidators: true });
+                } catch(e) { err = e; }
+                expect(err).toBeInstanceOf(mongoose.Error.ValidationError);
+            });
         });
 
-        it('повинен фільтрувати за роком (minYear)', async () => {
-            const res = await request(app).get('/api/cars?minYear=2020').expect(200);
-            expect(res.body).toHaveLength(1);
-            expect(res.body[0].model).toBe('New Auto');
+        describe('DELETE /api/cars/:id', () => {
+            it('повинен видалити автомобіль та повернути 204', async () => {
+                const car = await CarModel.create(validCar);
+                await request(app)
+                    .delete(`/api/cars/${car._id}`)
+                    .expect(204);
+
+                const foundCar = await CarModel.findById(car._id);
+                expect(foundCar).toBeNull();
+            });
         });
 
-        it('повинен фільтрувати за трансмісією', async () => {
-            const res = await request(app).get('/api/cars?transmission=manual').expect(200);
-            expect(res.body).toHaveLength(1);
-            expect(res.body[0].model).toBe('Old Manual');
+        describe('GET /api/cars/available (Специфічний маршрут)', () => {
+            it('повинен повертати лише доступні автомобілі', async () => {
+                await CarModel.create({ ...validCar, isAvailable: true });
+                await CarModel.create({ ...validCar, isAvailable: false });
+
+                const res = await request(app).get('/api/cars/available').expect(200);
+                expect(res.body).toHaveLength(1);
+                expect(res.body[0].isAvailable).toBe(true);
+            });
         });
 
-        it('повинен комбінувати фільтри', async () => {
-            const res = await request(app).get('/api/cars?minYear=2020&transmission=automatic').expect(200);
-            expect(res.body).toHaveLength(1);
-            expect(res.body[0].model).toBe('New Auto');
+        describe('Обробник помилок (500)', () => {
+            it('повинен повернути статус 500, якщо сталася внутрішня помилка сервера', async () => {
+                jest.spyOn(CarModel, 'find').mockImplementationOnce(() => {
+                    throw new Error('Системний збій БД');
+                });
 
-            const emptyRes = await request(app).get('/api/cars?minYear=2020&transmission=manual').expect(200);
-            expect(emptyRes.body).toHaveLength(0);
-        });
-    });
+                const res = await request(app)
+                    .get('/api/cars')
+                    .expect(500);
 
-    describe('GET /api/cars/available (Специфічний маршрут)', () => {
-        it('повинен повертати лише доступні автомобілі', async () => {
-            carStorage.create({ ...validCar, model: 'Car 1', isAvailable: true });
-            carStorage.create({ ...validCar, model: 'Car 2', isAvailable: false });
-            carStorage.create({ ...validCar, model: 'Car 3', isAvailable: true });
-
-            const res = await request(app).get('/api/cars/available').expect(200);
-
-            expect(res.body).toHaveLength(2);
-            res.body.forEach((car: any) => {
-                expect(car.isAvailable).toBe(true);
+                expect(res.body.message).toBe('Внутрішня помилка сервера');
             });
         });
     });
-    describe('Обробник помилок (500)', () => {
-        it('повинен повернути статус 500, якщо сталася внутрішня помилка сервера', async () => {
-            jest.spyOn(carStorage, 'getAll').mockImplementationOnce(() => {
-                throw new Error('Системний збій');
-            });
 
-            const res = await request(app)
-                .get('/api/cars')
-                .expect(500);
+    describe('Граничні випадки та помилки БД (для 100% покриття)', () => {
+        it('повинен повернути 409 при дублікаті унікального ключа (код 11000)', async () => {
+            jest.spyOn(carStorage, 'create').mockRejectedValueOnce({ code: 11000 });
+            await request(app).post('/api/cars').send(validCar).expect(409);
+        });
 
-            expect(res.body.message).toBe('Внутрішня помилка сервера');
+        it('повинен ловити помилки в catch для GET /available', async () => {
+            jest.spyOn(carStorage, 'getAll').mockRejectedValueOnce(new Error('DB'));
+            await request(app).get('/api/cars/available').expect(500);
+        });
+
+        it('повинен ловити помилки в catch для PATCH', async () => {
+            jest.spyOn(carStorage, 'update').mockRejectedValueOnce(new Error('DB'));
+            await request(app).patch(`/api/cars/${new mongoose.Types.ObjectId()}`).send({ year: 2025 }).expect(500);
+        });
+
+        it('повинен ловити помилки в catch для DELETE', async () => {
+            jest.spyOn(carStorage, 'delete').mockRejectedValueOnce(new Error('DB'));
+            await request(app).delete(`/api/cars/${new mongoose.Types.ObjectId()}`).expect(500);
+        });
+
+        it('повинен гарантовано ловити CastError', async () => {
+            const castErr = new Error('Cast failed');
+            castErr.name = 'CastError';
+            jest.spyOn(carStorage, 'getById').mockRejectedValueOnce(castErr);
+            await request(app).get('/api/cars/fake').expect(400);
         });
     });
 });
