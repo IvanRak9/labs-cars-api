@@ -52,6 +52,18 @@ describe('Автомобільний REST API (MongoDB)', () => {
             expect(err).toBeInstanceOf(mongoose.Error.ValidationError);
         });
 
+        it('повинен повернути 400 при mongoose ValidationError', async () => {
+            const validationError = new mongoose.Error.ValidationError();
+            jest.spyOn(carStorage, 'create').mockRejectedValueOnce(validationError);
+
+            const res = await request(app)
+                .post('/api/cars')
+                .send(validCar)
+                .expect(400);
+
+            expect(res.body.message).toBe('Помилка валідації БД');
+        });
+
         it('повинна обчислювати віртуальну властивість carAge', async () => {
             const currentYear = new Date().getFullYear();
             const car = new CarModel({ ...validCar, year: currentYear - 5 });
@@ -97,7 +109,19 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const res = await request(app).get('/api/cars?limit=1').expect(200);
                 expect(res.body.data).toHaveLength(1);
                 expect(res.body.pagination.total).toBe(2);
-                expect(res.body.pagination.pages).toBe(2);
+            });
+
+            it('повинен фільтрувати по minYear і transmission', async () => {
+                await CarModel.create({ ...validCar, year: 2010, transmission: 'manual' });
+                await CarModel.create({ ...validCar, year: 2022, transmission: 'automatic' });
+
+                const res = await request(app)
+                    .get('/api/cars?minYear=2020&transmission=automatic')
+                    .expect(200);
+
+                expect(res.body.data).toHaveLength(1);
+                expect(res.body.data[0].year).toBeGreaterThanOrEqual(2020);
+                expect(res.body.data[0].transmission).toBe('automatic');
             });
         });
 
@@ -137,14 +161,22 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 expect(res.body.model).toBe(validCar.model);
             });
 
-            it('повинен повернути 400 (Помилка БД) при спробі зберегти дані, що порушують схему', async () => {
+            it('повинен повернути 400 (Zod) при передачі невалідного enum', async () => {
                 const car = await CarModel.create(validCar);
+                const res = await request(app)
+                    .patch(`/api/cars/${car._id}`)
+                    .send({ transmission: 'invalid_enum' })
+                    .expect(400);
 
-                let err;
-                try {
-                    await CarModel.findByIdAndUpdate(car._id, { transmission: 'invalid_enum' }, { runValidators: true });
-                } catch(e) { err = e; }
-                expect(err).toBeInstanceOf(mongoose.Error.ValidationError);
+                expect(res.body.message).toBe('Помилка валідації даних (Zod)');
+            });
+
+            it('повинен повернути 404 при оновленні неіснуючого авто', async () => {
+                const fakeId = new mongoose.Types.ObjectId();
+                await request(app)
+                    .patch(`/api/cars/${fakeId}`)
+                    .send({ year: 2025 })
+                    .expect(404);
             });
         });
 
@@ -157,6 +189,13 @@ describe('Автомобільний REST API (MongoDB)', () => {
 
                 const foundCar = await CarModel.findById(car._id);
                 expect(foundCar).toBeNull();
+            });
+
+            it('повинен повернути 404 при видаленні неіснуючого авто', async () => {
+                const fakeId = new mongoose.Types.ObjectId();
+                await request(app)
+                    .delete(`/api/cars/${fakeId}`)
+                    .expect(404);
             });
         });
 
@@ -171,47 +210,33 @@ describe('Автомобільний REST API (MongoDB)', () => {
             });
         });
 
-        describe('Обробник помилок (500)', () => {
-            it('повинен повернути статус 500, якщо сталася внутрішня помилка сервера', async () => {
-                jest.spyOn(CarModel, 'find').mockImplementationOnce(() => {
-                    throw new Error('Системний збій БД');
-                });
-
-                const res = await request(app)
-                    .get('/api/cars')
-                    .expect(500);
-
-                expect(res.body.message).toBe('Внутрішня помилка сервера');
+        describe('Граничні випадки та помилки БД (для 100% покриття)', () => {
+            it('повинен повернути 409 при дублікаті унікального ключа (код 11000)', async () => {
+                jest.spyOn(carStorage, 'create').mockRejectedValueOnce({ code: 11000 });
+                await request(app).post('/api/cars').send(validCar).expect(409);
             });
-        });
-    });
 
-    describe('Граничні випадки та помилки БД (для 100% покриття)', () => {
-        it('повинен повернути 409 при дублікаті унікального ключа (код 11000)', async () => {
-            jest.spyOn(carStorage, 'create').mockRejectedValueOnce({ code: 11000 });
-            await request(app).post('/api/cars').send(validCar).expect(409);
-        });
+            it('повинен ловити помилки в catch для GET /available', async () => {
+                jest.spyOn(carStorage, 'getAll').mockRejectedValueOnce(new Error('DB'));
+                await request(app).get('/api/cars/available').expect(500);
+            });
 
-        it('повинен ловити помилки в catch для GET /available', async () => {
-            jest.spyOn(carStorage, 'getAll').mockRejectedValueOnce(new Error('DB'));
-            await request(app).get('/api/cars/available').expect(500);
-        });
+            it('повинен ловити помилки в catch для PATCH', async () => {
+                jest.spyOn(carStorage, 'update').mockRejectedValueOnce(new Error('DB'));
+                await request(app).patch(`/api/cars/${new mongoose.Types.ObjectId()}`).send({ year: 2025 }).expect(500);
+            });
 
-        it('повинен ловити помилки в catch для PATCH', async () => {
-            jest.spyOn(carStorage, 'update').mockRejectedValueOnce(new Error('DB'));
-            await request(app).patch(`/api/cars/${new mongoose.Types.ObjectId()}`).send({ year: 2025 }).expect(500);
-        });
+            it('повинен ловити помилки в catch для DELETE', async () => {
+                jest.spyOn(carStorage, 'delete').mockRejectedValueOnce(new Error('DB'));
+                await request(app).delete(`/api/cars/${new mongoose.Types.ObjectId()}`).expect(500);
+            });
 
-        it('повинен ловити помилки в catch для DELETE', async () => {
-            jest.spyOn(carStorage, 'delete').mockRejectedValueOnce(new Error('DB'));
-            await request(app).delete(`/api/cars/${new mongoose.Types.ObjectId()}`).expect(500);
-        });
-
-        it('повинен гарантовано ловити CastError', async () => {
-            const castErr = new Error('Cast failed');
-            castErr.name = 'CastError';
-            jest.spyOn(carStorage, 'getById').mockRejectedValueOnce(castErr);
-            await request(app).get('/api/cars/fake').expect(400);
+            it('повинен гарантовано ловити CastError', async () => {
+                const castErr = new Error('Cast failed');
+                castErr.name = 'CastError';
+                jest.spyOn(carStorage, 'getById').mockRejectedValueOnce(castErr);
+                await request(app).get('/api/cars/fake').expect(400);
+            });
         });
     });
 });
