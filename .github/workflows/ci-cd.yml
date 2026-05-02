@@ -3,7 +3,7 @@ name: CI Pipeline
 # Запускати конвеєр при кожному пуші в гілку main
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
 
 jobs:
   # Задача 1: Збірка коду
