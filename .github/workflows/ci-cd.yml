@@ -1,0 +1,46 @@
+name: CI Pipeline
+
+# Запускати конвеєр при кожному пуші в гілку main
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  # Задача 1: Збірка коду
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm' # Автоматичне кешування npm залежностей
+
+      - name: Install dependencies
+        run: npm ci # Встановлення строго за package-lock.json
+
+      - name: Build project
+        run: npm run build # Компіляція TypeScript
+
+  # Задача 2: Тестування
+  test:
+    needs: build # Ця задача чекає на успішне завершення build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test # Запуск Jest
