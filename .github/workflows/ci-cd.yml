@@ -44,3 +44,20 @@ jobs:
 
       - name: Run unit tests
         run: npm run test # Запуск Jest
+
+  # Задача 3: Автоматичний деплой
+  deploy:
+    needs: test # Чекаємо, поки пройдуть тести
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' # Деплоїмо тільки з гілки master
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
