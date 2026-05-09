@@ -2,10 +2,11 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { carStorage } from '../storage/car';
 import { createCarSchema, updateCarSchema } from '../schemas/car.schema';
 import { validate } from '../middleware/validate';
+import { requireAuth } from '../middleware/auth.middleware';
 
 const router = Router();
 
-// GET: Специфічний маршрут
+// GET залишаємо без requireAuth (публічні маршрути)
 router.get('/available', async (req: Request, res: Response, next: NextFunction) => {
     try {
         const result = await carStorage.getAll({ isAvailable: true }, 1, 100);
@@ -15,7 +16,6 @@ router.get('/available', async (req: Request, res: Response, next: NextFunction)
     }
 });
 
-// GET: Отримання всіх записів
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { minYear, transmission, page, limit } = req.query;
@@ -38,7 +38,6 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 });
 
-// GET: Отримання за ID
 router.get('/:id', async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     try {
         const car = await carStorage.getById(req.params.id);
@@ -51,36 +50,52 @@ router.get('/:id', async (req: Request<{ id: string }>, res: Response, next: Nex
     }
 });
 
-// POST: Створення нового автомобіля
-router.post('/', validate(createCarSchema), async (req: Request, res: Response, next: NextFunction) => {
+// POST: Створення нового автомобіля (Захищений)
+router.post('/', requireAuth, validate(createCarSchema), async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const newCar = await carStorage.create(req.body);
+        const carData = {
+            ...req.body,
+            ownerId: req.userId
+        };
+        const newCar = await carStorage.create(carData);
         res.status(201).json(newCar);
     } catch (error) {
         next(error);
     }
 });
 
-// PATCH: Оновлення автомобіля
-router.patch('/:id', validate(updateCarSchema), async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+// PATCH: Оновлення автомобіля (Захищений)
+router.patch('/:id', requireAuth, validate(updateCarSchema), async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     try {
-        const updatedCar = await carStorage.update(req.params.id, req.body);
-        if (!updatedCar) {
+        const car = await carStorage.getById(req.params.id);
+        if (!car) {
             return res.status(404).json({ message: 'Автомобіль не знайдено' });
         }
+
+        if (car.ownerId.toString() !== req.userId) {
+            return res.status(403).json({ message: 'У вас немає прав на редагування цього авто' });
+        }
+
+        const updatedCar = await carStorage.update(req.params.id, req.body);
         res.status(200).json(updatedCar);
     } catch (error) {
         next(error);
     }
 });
 
-// DELETE: Видалення автомобіля
-router.delete('/:id', async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+// DELETE: Видалення автомобіля (Захищений)
+router.delete('/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
     try {
-        const deletedCar = await carStorage.delete(req.params.id);
-        if (!deletedCar) {
+        const car = await carStorage.getById(req.params.id);
+        if (!car) {
             return res.status(404).json({ message: 'Автомобіль не знайдено' });
         }
+
+        if (car.ownerId.toString() !== req.userId) {
+            return res.status(403).json({ message: 'У вас немає прав на видалення цього авто' });
+        }
+
+        await carStorage.delete(req.params.id);
         res.status(204).send();
     } catch (error) {
         next(error);

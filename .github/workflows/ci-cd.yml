@@ -1,6 +1,5 @@
 name: CI Pipeline
 
-# Запускати конвеєр при кожному пуші в гілку main
 on:
   push:
     branches: [ "master" ]
@@ -17,17 +16,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm' # Автоматичне кешування npm залежностей
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci # Встановлення строго за package-lock.json
+        run: npm ci
 
       - name: Build project
-        run: npm run build # Компіляція TypeScript
+        run: npm run build
 
   # Задача 2: Тестування
   test:
-    needs: build # Ця задача чекає на успішне завершення build
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -43,13 +42,13 @@ jobs:
         run: npm ci
 
       - name: Run unit tests
-        run: npm run test # Запуск Jest
+        run: npm run test
 
   # Задача 3: Автоматичний деплой
   deploy:
-    needs: test # Чекаємо, поки пройдуть тести
+    needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' # Деплоїмо тільки з гілки master
+    if: github.ref == 'refs/heads/master'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

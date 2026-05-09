@@ -1,4 +1,4 @@
-import { Schema, model, Document } from 'mongoose';
+import { Schema, model, Types } from 'mongoose'; // Додали Types
 
 export interface ICar {
     model: string;
@@ -9,6 +9,7 @@ export interface ICar {
     createdAt?: Date;
     updatedAt?: Date;
     carAge?: number;
+    ownerId: Types.ObjectId | string;
 }
 
 const carSchema = new Schema<ICar>({
@@ -39,6 +40,11 @@ const carSchema = new Schema<ICar>({
     isAvailable: {
         type: Boolean,
         default: true
+    },
+    ownerId: {
+        type: Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
     }
 }, {
     timestamps: true,
