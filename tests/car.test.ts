@@ -4,6 +4,15 @@ import app from '../src/app';
 import { setupTestDB, clearTestDB, teardownTestDB } from './setup';
 import { CarModel } from '../src/models/car.model';
 import { carStorage } from '../src/storage/car';
+import jwt from 'jsonwebtoken';
+
+const testUserId = new mongoose.Types.ObjectId();
+const testToken = jwt.sign(
+    { userId: testUserId.toString() },
+    process.env.JWT_SECRET || 'default_secret',
+    { expiresIn: '15m' }
+);
+const authCookie = `access_token=${testToken}`;
 
 beforeAll(async () => {
     await setupTestDB();
@@ -24,7 +33,8 @@ describe('Автомобільний REST API (MongoDB)', () => {
         description: 'Надійний седан',
         year: 2022,
         transmission: 'automatic',
-        isAvailable: true
+        isAvailable: true,
+        ownerId: testUserId
     };
 
     describe('Unit-тести Моделі (CarModel)', () => {
@@ -58,6 +68,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
 
             const res = await request(app)
                 .post('/api/cars')
+                .set('Cookie', authCookie)
                 .send(validCar)
                 .expect(400);
 
@@ -77,6 +88,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
             it('повинен створити новий автомобіль та повернути 201', async () => {
                 const res = await request(app)
                     .post('/api/cars')
+                    .set('Cookie', authCookie)
                     .send(validCar)
                     .expect(201);
 
@@ -88,6 +100,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const invalidCar = { year: 2020 };
                 const res = await request(app)
                     .post('/api/cars')
+                    .set('Cookie', authCookie)
                     .send(invalidCar)
                     .expect(400);
 
@@ -97,6 +110,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
 
         describe('GET /api/cars', () => {
             it('повинен повернути об\'єкт з data та pagination, якщо немає записів', async () => {
+                // GET-запити залишаються публічними
                 const res = await request(app).get('/api/cars').expect(200);
                 expect(res.body.data).toEqual([]);
                 expect(res.body.pagination.total).toBe(0);
@@ -154,6 +168,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const car = await CarModel.create(validCar);
                 const res = await request(app)
                     .patch(`/api/cars/${car._id}`)
+                    .set('Cookie', authCookie)
                     .send({ year: 2025 })
                     .expect(200);
 
@@ -165,6 +180,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const car = await CarModel.create(validCar);
                 const res = await request(app)
                     .patch(`/api/cars/${car._id}`)
+                    .set('Cookie', authCookie)
                     .send({ transmission: 'invalid_enum' })
                     .expect(400);
 
@@ -175,6 +191,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const fakeId = new mongoose.Types.ObjectId();
                 await request(app)
                     .patch(`/api/cars/${fakeId}`)
+                    .set('Cookie', authCookie)
                     .send({ year: 2025 })
                     .expect(404);
             });
@@ -185,6 +202,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const car = await CarModel.create(validCar);
                 await request(app)
                     .delete(`/api/cars/${car._id}`)
+                    .set('Cookie', authCookie)
                     .expect(204);
 
                 const foundCar = await CarModel.findById(car._id);
@@ -195,6 +213,7 @@ describe('Автомобільний REST API (MongoDB)', () => {
                 const fakeId = new mongoose.Types.ObjectId();
                 await request(app)
                     .delete(`/api/cars/${fakeId}`)
+                    .set('Cookie', authCookie)
                     .expect(404);
             });
         });
@@ -213,7 +232,11 @@ describe('Автомобільний REST API (MongoDB)', () => {
         describe('Граничні випадки та помилки БД (для 100% покриття)', () => {
             it('повинен повернути 409 при дублікаті унікального ключа (код 11000)', async () => {
                 jest.spyOn(carStorage, 'create').mockRejectedValueOnce({ code: 11000 });
-                await request(app).post('/api/cars').send(validCar).expect(409);
+                await request(app)
+                    .post('/api/cars')
+                    .set('Cookie', authCookie)
+                    .send(validCar)
+                    .expect(409);
             });
 
             it('повинен ловити помилки в catch для GET /available', async () => {
@@ -222,13 +245,22 @@ describe('Автомобільний REST API (MongoDB)', () => {
             });
 
             it('повинен ловити помилки в catch для PATCH', async () => {
-                jest.spyOn(carStorage, 'update').mockRejectedValueOnce(new Error('DB'));
-                await request(app).patch(`/api/cars/${new mongoose.Types.ObjectId()}`).send({ year: 2025 }).expect(500);
+                // Мокаємо getById, бо він тепер викликається найпершим для перевірки власника
+                jest.spyOn(carStorage, 'getById').mockRejectedValueOnce(new Error('DB'));
+                await request(app)
+                    .patch(`/api/cars/${new mongoose.Types.ObjectId()}`)
+                    .set('Cookie', authCookie)
+                    .send({ year: 2025 })
+                    .expect(500);
             });
 
             it('повинен ловити помилки в catch для DELETE', async () => {
-                jest.spyOn(carStorage, 'delete').mockRejectedValueOnce(new Error('DB'));
-                await request(app).delete(`/api/cars/${new mongoose.Types.ObjectId()}`).expect(500);
+                // Мокаємо getById, бо він викликається перед видаленням
+                jest.spyOn(carStorage, 'getById').mockRejectedValueOnce(new Error('DB'));
+                await request(app)
+                    .delete(`/api/cars/${new mongoose.Types.ObjectId()}`)
+                    .set('Cookie', authCookie)
+                    .expect(500);
             });
 
             it('повинен гарантовано ловити CastError', async () => {
